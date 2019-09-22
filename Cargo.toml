@@ -13,3 +13,4 @@ futures-timer = "0.4"
 config = "0.9.3"
 serde = { version = "1.0", features = ["derive"] }
 clap = "2.33.0"
+snafu = { version = "0.5.0", features = ["unstable-futures"] }

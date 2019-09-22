@@ -3,8 +3,20 @@ use std::time::Duration;
 use futures_timer::ext::TryFutureExt;
 use serde::Deserialize;
 use clap::{Arg, App};
+use snafu::Snafu;
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+type SnafuResult<T> = Result<T, Error>;
+
+
+#[derive(Snafu, Debug)]
+enum Error {
+    #[snafu(display("Could not open config"))]
+    CouldNotFindConfig{},
+    #[snafu(display("Error reading remote API"))]
+    RemoteAPIError{},
+}
+
 
 #[derive(Deserialize, Debug)]
 struct AdvisorApp {
@@ -29,9 +41,17 @@ impl Config {
     }
 }
 
-async fn get(endpoint: String) -> MyResult<String> {
-    let mut res = surf::get(endpoint).timeout(Duration::from_secs(1)).await?;
-    res.body_string().await
+async fn get(endpoint: String) -> SnafuResult<String> {
+    let mut res = surf::get(endpoint).timeout(Duration::from_secs(1)).await.or_else(|_| RemoteAPIError.fail() )?;
+
+    res.body_string().await.or_else(|_| RemoteAPIError.fail())
+}
+
+fn load_config() -> SnafuResult<Config> {
+    let mut settings = config::Config::default();
+    settings.merge(config::File::with_name(".advisor"));
+
+    settings.try_into::<Config>().or_else(|_| CouldNotFindConfig.fail())
 }
 
 
@@ -52,14 +72,14 @@ async fn main() -> MyResult<()> {
 
     let app_name = matches.value_of("app_name").unwrap();
 
-    let mut settings = config::Config::default();
-    settings.merge(config::File::with_name(".advisor"));
-
-    let config = settings.try_into::<Config>().unwrap();
+    let config = load_config().unwrap();
 
     let app = config.for_app(app_name).unwrap();
 
-    let value = get(app.healthcheck()).await?;
-    println!("{}", value);
+    match get(app.healthcheck()).await {
+        Ok(value) => println!("Success: {}", value),
+        Err(e) => println!("Failure: {}", e),
+    }
+
     Ok(())
 }
