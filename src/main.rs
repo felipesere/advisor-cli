@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures_timer::ext::TryFutureExt;
 use serde::Deserialize;
-use clap::{arg_enum, value_t, Arg, App};
+use clap::{Arg, App, SubCommand};
 use snafu::Snafu;
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -110,6 +110,10 @@ impl Command {
         Unknown(arguments)
     }
 }
+fn has_at(v: String) -> Result<(), String> {
+    if v.contains("@") { return Ok(()); }
+    Err(String::from("The value did not contain the required @ sigil"))
+}
 
 
 #[runtime::main]
@@ -125,22 +129,44 @@ async fn main() -> MyResult<()> {
             .help("Which app to act upon")
             .required(true)
             .takes_value(true))
+        .subcommand(SubCommand::with_name("show")
+            .arg(Arg::with_name("kind").takes_value(true).required(true).possible_values(&["people", "questionnaires"]))
+        )
+        .subcommand(SubCommand::with_name("delete")
+            .arg(Arg::with_name("email").takes_value(true).required(true).validator(has_at))
+        )
+        .subcommand(SubCommand::with_name("update")
+            .arg(Arg::with_name("questionnaire_id").takes_value(true).required(true))
+            .arg(Arg::with_name("mode").takes_value(true).required(true).possible_values(&["add", "remove"]))
+            .arg(Arg::with_name("email").takes_value(true).required(true).validator(has_at))
+        )
         .get_matches();
 
-    let args: Vec<String> = std::env::args().collect();
+    if let Some(m) = matches.subcommand_matches("show") {
+        println!("Running the show command with {:?}", m.value_of("kind"))
+    }
 
-    let command = Command::parse(args);
+    if let Some(m) = matches.subcommand_matches("delete") {
+        println!("Running the delete command with {:?}", m.value_of("email"))
+    }
 
-    let config = load_config().unwrap();
+    if let Some(m) = matches.subcommand_matches("update") {
+        println!("Running the update command to {:?} with questionnaire {:?} and email {:?}",m.value_of("mode"), m.value_of("questionnaire_id"), m.value_of("email"))
+    }
+
+    let config = load_config().expect("was not able to find a config");
 
     let app_name = matches.value_of("app_name").unwrap();
 
-    let app = config.for_app(app_name).unwrap();
+    let app = config.for_app(app_name).expect(&format!("unable to find app {}", app_name));
 
+
+    /*
     match get(app.healthcheck()).await {
         Ok(value) => println!("Success: {}", value),
         Err(e) => println!("Failure: {}", e),
     }
+    */
 
     Ok(())
 }
