@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures_timer::ext::TryFutureExt;
 use serde::Deserialize;
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App, SubCommand, ArgMatches};
 use snafu::Snafu;
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -16,7 +16,6 @@ enum Error {
     #[snafu(display("Error reading remote API"))]
     RemoteAPIError{},
 }
-
 
 #[derive(Deserialize, Debug)]
 struct AdvisorApp {
@@ -69,45 +68,42 @@ enum Command {
     CreatePerson(PersonParams),
     AddPersonToQuestionnaire{id: String, email: String},
     RemovePersonFromQuestionnaire{id: String, email: String},
-    Unknown(Vec<String>),
+    Unexpected,
+}
+
+fn string(m: &ArgMatches, name: &'static str) -> String {
+    m.value_of(name).expect(&format!("'{}' is marked as required", name)).to_owned()
 }
 
 impl Command {
-    fn parse(arguments: Vec<String>) -> Command {
+    fn parse(matches: &ArgMatches) -> Command {
         use Command::*;
 
-        if arguments == vec!("show".to_string(), "people".to_string()) {
-            return ShowPeople;
-        }
-
-        if arguments == vec!("show".to_string(), "questionnares".to_string()) {
-            return ShowQuestionnaires;
-        }
-
-        if arguments.get(0) == Some(&"delete".to_string()) {
-            if let Some(email) = arguments.get(1) {
-                return DeletePerson { email: email.clone() }
+        if let Some(m) = matches.subcommand_matches("show") {
+            match m.value_of("kind") {
+                Some("people") => return ShowPeople,
+                Some("questionnaires") => return ShowQuestionnaires,
+                None | Some(_) => unreachable!("'kind' is marked as required only allowed to be one of two values"),
             }
         }
 
-        let add = "add".to_string();
-        let remove = "remove".to_string();
+        if let Some(m) = matches.subcommand_matches("delete") {
+            let email = string(m, "email");
+            return DeletePerson{ email }
+        }
 
-        if arguments.get(0) == Some(&"update".to_string()) {
-            match arguments.get(2) {
-                Some(a) if a == &add => return AddPersonToQuestionnaire { id: arguments[1].clone(), email: arguments[3].clone() },
-                Some(a) if a == &remove => return RemovePersonFromQuestionnaire { id: arguments[1].clone(), email: arguments[3].clone() },
-                None | Some(_) => (),
+        if let Some(m) = matches.subcommand_matches("update") {
+            let id = string(m, "questionnaire_id");
+            let email = string(m, "email");
+
+            match m.value_of("mode") {
+                Some("add") =>  return AddPersonToQuestionnaire{id , email},
+                Some("remove") =>  return RemovePersonFromQuestionnaire{id, email},
+                None | Some(_) => unreachable!("'mode' is marked as required and one of two values")
             }
         }
 
-        if arguments.get(0) == Some(&"create".to_string()) && arguments.get(1) == Some(&"person".to_string()) {
-            let remainder = arguments.iter().skip(2).collect::<Vec<_>>();
-            for chunk in remainder.chunks_exact(2) {
-            }
-        }
-
-        Unknown(arguments)
+        Unexpected
     }
 }
 fn has_at(v: String) -> Result<(), String> {
@@ -118,6 +114,8 @@ fn has_at(v: String) -> Result<(), String> {
 
 #[runtime::main]
 async fn main() -> MyResult<()> {
+    let email = Arg::with_name("email").takes_value(true).required(true).validator(has_at);
+
     let matches = App::new("Advisor-CLI")
         .version("0.1")
         .author("Felipe Sere felipe@sere.dev>")
@@ -132,106 +130,27 @@ async fn main() -> MyResult<()> {
         .subcommand(SubCommand::with_name("show")
             .arg(Arg::with_name("kind").takes_value(true).required(true).possible_values(&["people", "questionnaires"]))
         )
-        .subcommand(SubCommand::with_name("delete")
-            .arg(Arg::with_name("email").takes_value(true).required(true).validator(has_at))
-        )
+        .subcommand(SubCommand::with_name("delete").arg(&email))
         .subcommand(SubCommand::with_name("update")
             .arg(Arg::with_name("questionnaire_id").takes_value(true).required(true))
             .arg(Arg::with_name("mode").takes_value(true).required(true).possible_values(&["add", "remove"]))
-            .arg(Arg::with_name("email").takes_value(true).required(true).validator(has_at))
+            .arg(&email)
         )
         .get_matches();
 
-    if let Some(m) = matches.subcommand_matches("show") {
-        println!("Running the show command with {:?}", m.value_of("kind"))
-    }
+    let app_name = matches.value_of("app_name").unwrap();
+    let c = Command::parse(&matches);
 
-    if let Some(m) = matches.subcommand_matches("delete") {
-        println!("Running the delete command with {:?}", m.value_of("email"))
-    }
-
-    if let Some(m) = matches.subcommand_matches("update") {
-        println!("Running the update command to {:?} with questionnaire {:?} and email {:?}",m.value_of("mode"), m.value_of("questionnaire_id"), m.value_of("email"))
-    }
+    println!("Comand: {:?}", c);
 
     let config = load_config().expect("was not able to find a config");
 
-    let app_name = matches.value_of("app_name").unwrap();
-
     let app = config.for_app(app_name).expect(&format!("unable to find app {}", app_name));
 
-
-    /*
     match get(app.healthcheck()).await {
         Ok(value) => println!("Success: {}", value),
         Err(e) => println!("Failure: {}", e),
     }
-    */
 
     Ok(())
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    macro_rules! strings {
-        ($($x:expr),*) => (vec![$($x.to_string()),*]);
-    }
-
-
-    #[test]
-    fn test_parse_unknown() {
-        let command = Command::parse(strings!("foo", "bar"));
-
-        assert_eq!(command, Command::Unknown(strings!("foo", "bar")))
-    }
-
-    #[test]
-    fn test_parse_show_people() {
-        let command = Command::parse(strings!("show", "people"));
-
-        assert_eq!(command, Command::ShowPeople)
-    }
-
-    #[test]
-    fn test_parse_show_questionnaires() {
-        let command = Command::parse(strings!("show", "questionnares"));
-
-        assert_eq!(command, Command::ShowQuestionnaires)
-    }
-
-    #[test]
-    fn test_parse_delete_person() {
-        let command = Command::parse(strings!("delete", "a@b.com"));
-
-        assert_eq!(command, Command::DeletePerson{email: "a@b.com".to_string()})
-    }
-
-    #[test]
-    fn test_add_person_to_questionnaire() {
-        let command = Command::parse(strings!("update", "123a", "add", "a@b.com"));
-
-        assert_eq!(command, Command::AddPersonToQuestionnaire{id: "123a".to_string(), email: "a@b.com".to_string()})
-    }
-
-    #[test]
-    fn test_remove_person_from_questionnaire() {
-        let command = Command::parse(strings!("update", "123a", "remove", "a@b.com"));
-
-        assert_eq!(command, Command::RemovePersonFromQuestionnaire{id: "123a".to_string(), email: "a@b.com".to_string()})
-    }
-
-    #[test]
-    fn test_create_person() {
-        let command = Command::parse(strings!("create", "person", "--email", "a@b.com", "--name", "Steve"));
-
-        let mut params: HashMap<String, String> = HashMap::new();
-        params.insert("name".to_string(), "Steve".to_string());
-        params.insert("email".to_string(), "a@b.com".to_string());
-
-        assert_eq!(command, Command::CreatePerson(params))
-    }
 }
