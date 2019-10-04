@@ -76,6 +76,36 @@ fn string(m: &ArgMatches, name: &'static str) -> String {
 }
 
 impl Command {
+    fn get() -> (String, Command) {
+        let email = Arg::with_name("email").takes_value(true).required(true).validator(has_at);
+
+        let matches = App::new("Advisor-CLI")
+            .version("0.1")
+            .author("Felipe Sere felipe@sere.dev>")
+            .about("Managing instances of advisor")
+            .arg(Arg::with_name("app_name")
+                .short("a")
+                .long("app")
+                .value_name("APP")
+                .help("Which app to act upon")
+                .required(true)
+                .takes_value(true))
+            .subcommand(SubCommand::with_name("show")
+                .arg(Arg::with_name("kind").takes_value(true).required(true).possible_values(&["people", "questionnaires"]))
+            )
+            .subcommand(SubCommand::with_name("delete").arg(&email))
+            .subcommand(SubCommand::with_name("update")
+                .arg(Arg::with_name("questionnaire_id").takes_value(true).required(true))
+                .arg(Arg::with_name("mode").takes_value(true).required(true).possible_values(&["add", "remove"]))
+                .arg(&email)
+            )
+            .get_matches();
+
+        let app_name = string(&matches, "app");
+
+        (app_name, Command::parse(&matches))
+    }
+
     fn parse(matches: &ArgMatches) -> Command {
         use Command::*;
 
@@ -112,40 +142,16 @@ fn has_at(v: String) -> Result<(), String> {
 }
 
 
+
 #[runtime::main]
 async fn main() -> MyResult<()> {
-    let email = Arg::with_name("email").takes_value(true).required(true).validator(has_at);
-
-    let matches = App::new("Advisor-CLI")
-        .version("0.1")
-        .author("Felipe Sere felipe@sere.dev>")
-        .about("Managing instances of advisor")
-        .arg(Arg::with_name("app_name")
-            .short("a")
-            .long("app")
-            .value_name("APP")
-            .help("Which app to act upon")
-            .required(true)
-            .takes_value(true))
-        .subcommand(SubCommand::with_name("show")
-            .arg(Arg::with_name("kind").takes_value(true).required(true).possible_values(&["people", "questionnaires"]))
-        )
-        .subcommand(SubCommand::with_name("delete").arg(&email))
-        .subcommand(SubCommand::with_name("update")
-            .arg(Arg::with_name("questionnaire_id").takes_value(true).required(true))
-            .arg(Arg::with_name("mode").takes_value(true).required(true).possible_values(&["add", "remove"]))
-            .arg(&email)
-        )
-        .get_matches();
-
-    let app_name = matches.value_of("app_name").unwrap();
-    let c = Command::parse(&matches);
+    let (app_name, c) = Command::get();
 
     println!("Comand: {:?}", c);
 
     let config = load_config().expect("was not able to find a config");
 
-    let app = config.for_app(app_name).expect(&format!("unable to find app {}", app_name));
+    let app = config.for_app(&app_name).expect(&format!("unable to find app {}", app_name));
 
     match get(app.healthcheck()).await {
         Ok(value) => println!("Success: {}", value),
