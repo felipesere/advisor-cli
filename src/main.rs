@@ -15,15 +15,46 @@ enum Error {
     CouldNotFindConfig{},
     #[snafu(display("Error reading remote API"))]
     RemoteAPIError{},
+    #[snafu(display("Error reading remote API"))]
+    CommandNotFound,
+}
+
+#[derive(Eq, PartialEq, Debug)]
+enum Command {
+    Healthcheck,
+    ShowQuestionnaires,
+    ShowPeople,
+    DeletePerson{email: String},
+    CreatePerson(PersonParams),
+    AddPersonToQuestionnaire{id: String, email: String},
+    RemovePersonFromQuestionnaire{id: String, email: String},
+    Unexpected,
+}
+
+enum Authentication {
+    None,
+    Token(String)
 }
 
 #[derive(Deserialize, Debug)]
 struct AdvisorApp {
     name: String,
     location: String,
+    token: String,
 }
 
+
 impl AdvisorApp {
+    async fn run(&self, command: Command) -> SnafuResult<String> {
+        use Command::*;
+
+        match command {
+            Healthcheck => get(self.healthcheck(), Authentication::None).await,
+            ShowPeople => get(self.list_people(), Authentication::Token(self.token.clone())).await,
+                _ => Err(Error::CommandNotFound),
+        }
+    }
+
     fn healthcheck(&self) -> String {
         format!("{}/healthcheck", self.location)
     }
@@ -44,8 +75,14 @@ impl Config {
     }
 }
 
-async fn get(endpoint: String) -> SnafuResult<String> {
-    let mut res = surf::get(endpoint).timeout(Duration::from_secs(1)).await.or_else(|_| RemoteAPIError.fail() )?;
+async fn get(endpoint: String, auth: Authentication) -> SnafuResult<String> {
+    let mut req = surf::get(endpoint);
+
+    if let Authentication::Token(token) = auth {
+        req = req.set_header("Authorization", format!("Bearer {}", token));
+    }
+
+    let mut res = req.timeout(Duration::from_secs(1)).await.or_else(|_| RemoteAPIError.fail() )?;
 
     res.body_string().await.or_else(|_| RemoteAPIError.fail())
 }
@@ -60,16 +97,6 @@ fn load_config() -> SnafuResult<Config> {
 type PersonParams = std::collections::HashMap<String, String>;
 
 
-#[derive(Eq, PartialEq, Debug)]
-enum Command {
-    ShowQuestionnaires,
-    ShowPeople,
-    DeletePerson{email: String},
-    CreatePerson(PersonParams),
-    AddPersonToQuestionnaire{id: String, email: String},
-    RemovePersonFromQuestionnaire{id: String, email: String},
-    Unexpected,
-}
 
 fn string(m: &ArgMatches, name: &'static str) -> String {
     m.value_of(name).expect(&format!("'{}' is marked as required", name)).to_owned()
@@ -99,15 +126,20 @@ impl Command {
                 .arg(Arg::with_name("mode").takes_value(true).required(true).possible_values(&["add", "remove"]))
                 .arg(&email)
             )
+            .subcommand(SubCommand::with_name("health"))
             .get_matches();
 
-        let app_name = string(&matches, "app");
+        let app_name = string(&matches, "app_name");
 
         (app_name, Command::parse(&matches))
     }
 
     fn parse(matches: &ArgMatches) -> Command {
         use Command::*;
+
+        if let Some(_) = matches.subcommand_matches("health") {
+            return Healthcheck;
+        }
 
         if let Some(m) = matches.subcommand_matches("show") {
             match m.value_of("kind") {
@@ -153,7 +185,7 @@ async fn main() -> MyResult<()> {
 
     let app = config.for_app(&app_name).expect(&format!("unable to find app {}", app_name));
 
-    match get(app.healthcheck()).await {
+    match app.run(c).await {
         Ok(value) => println!("Success: {}", value),
         Err(e) => println!("Failure: {}", e),
     }
