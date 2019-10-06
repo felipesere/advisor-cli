@@ -4,6 +4,7 @@ use futures_timer::ext::TryFutureExt;
 use serde::Deserialize;
 use clap::{Arg, App, SubCommand, ArgMatches};
 use snafu::Snafu;
+use prettytable::{Table, row, cell};
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 type SnafuResult<T> = Result<T, Error>;
@@ -43,6 +44,30 @@ struct AdvisorApp {
     token: String,
 }
 
+struct StringWriter {
+    content: String
+}
+
+impl StringWriter {
+    fn new() -> Self {
+        StringWriter { content: String::new() }
+    }
+}
+
+impl std::io::Write for StringWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let addition = std::str::from_utf8(&buf).unwrap();
+
+        self.content.push_str(addition);
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 
 impl AdvisorApp {
     async fn run(&self, command: Command) -> SnafuResult<String> {
@@ -50,7 +75,7 @@ impl AdvisorApp {
 
         match command {
             Healthcheck => get(self.healthcheck(), Authentication::None).await,
-            ShowPeople => get(self.list_people(), Authentication::Token(self.token.clone())).await,
+            ShowPeople => self.show_people().await,
                 _ => Err(Error::CommandNotFound),
         }
     }
@@ -59,10 +84,35 @@ impl AdvisorApp {
         format!("{}/healthcheck", self.location)
     }
 
-    fn list_people(&self) -> String {
-        format!("{}/admin/people", self.location)
+    async fn show_people(&self) -> SnafuResult<String> {
+        let url = format!("{}/admin/people", self.location);
+
+        let raw = get(url, Authentication::Token(self.token.clone())).await.expect("read from API");
+
+        let people: People = serde_json::from_str(&raw).expect("Was not able to read API response as JSON");
+
+        let mut table = Table::new();
+        table.add_row(row!["Name", "Email", "Is mentor"]);
+
+        for person in people {
+            table.add_row(row![person.name, person.email, person.is_mentor]);
+        }
+        let mut output = StringWriter::new();
+        table.print(&mut output).expect("Was not able to write to buffer");
+
+        Result::Ok(output.content)
     }
 }
+
+
+#[derive(Deserialize, Debug)]
+struct Person {
+    name: String,
+    email: String,
+    is_mentor: bool,
+}
+
+type People = Vec<Person>;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -82,7 +132,7 @@ async fn get(endpoint: String, auth: Authentication) -> SnafuResult<String> {
         req = req.set_header("Authorization", format!("Bearer {}", token));
     }
 
-    let mut res = req.timeout(Duration::from_secs(1)).await.or_else(|_| RemoteAPIError.fail() )?;
+    let mut res = req.timeout(Duration::from_secs(5)).await.or_else(|_| RemoteAPIError.fail() )?;
 
     res.body_string().await.or_else(|_| RemoteAPIError.fail())
 }
@@ -186,7 +236,7 @@ async fn main() -> MyResult<()> {
     let app = config.for_app(&app_name).expect(&format!("unable to find app {}", app_name));
 
     match app.run(c).await {
-        Ok(value) => println!("Success: {}", value),
+        Ok(value) => println!("Success: {}\n", value),
         Err(e) => println!("Failure: {}", e),
     }
 
