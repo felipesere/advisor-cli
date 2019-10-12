@@ -5,6 +5,7 @@ use serde::Deserialize;
 use clap::{Arg, App, SubCommand, ArgMatches};
 use snafu::Snafu;
 use prettytable::{Table, row, cell};
+use spinners::{Spinner, Spinners};
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 type SnafuResult<T> = Result<T, Error>;
@@ -133,7 +134,9 @@ async fn get(endpoint: String, auth: Authentication) -> SnafuResult<String> {
         req = req.set_header("Authorization", format!("Bearer {}", token));
     }
 
-    let mut res = req.timeout(Duration::from_secs(5)).await.or_else(|_| RemoteAPIError.fail() )?;
+    let sp = Spinner::new(Spinners::Dots9, "Waiting for 20 seconds".into());
+    let mut res = req.timeout(Duration::from_secs(20)).await.or_else(|_| RemoteAPIError.fail() )?;
+    sp.stop();
 
     res.body_string().await.or_else(|_| RemoteAPIError.fail())
 }
