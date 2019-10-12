@@ -116,6 +116,7 @@ type People = Vec<Person>;
 
 #[derive(Deserialize, Debug)]
 struct Config {
+    default: Option<String>,
     apps: Vec<AdvisorApp>
 }
 
@@ -146,14 +147,12 @@ fn load_config() -> SnafuResult<Config> {
 
 type PersonParams = std::collections::HashMap<String, String>;
 
-
-
 fn string(m: &ArgMatches, name: &'static str) -> String {
     m.value_of(name).expect(&format!("'{}' is marked as required", name)).to_owned()
 }
 
 impl Command {
-    fn get() -> (String, Command) {
+    fn get() -> (Option<String>, Command) {
         let email = Arg::with_name("email").takes_value(true).required(true).validator(has_at);
 
         let matches = App::new("Advisor-CLI")
@@ -164,8 +163,7 @@ impl Command {
                 .short("a")
                 .long("app")
                 .value_name("APP")
-                .help("Which app to act upon")
-                .required(true)
+                .help("Which app to act upon. Overrides default in .advisor.json")
                 .takes_value(true))
             .subcommand(SubCommand::with_name("show")
                 .arg(Arg::with_name("kind").takes_value(true).required(true).possible_values(&["people", "questionnaires"]))
@@ -179,7 +177,7 @@ impl Command {
             .subcommand(SubCommand::with_name("health"))
             .get_matches();
 
-        let app_name = string(&matches, "app_name");
+        let app_name = matches.value_of("app_name").map(|val| val.to_owned());
 
         (app_name, Command::parse(&matches))
     }
@@ -233,7 +231,9 @@ async fn main() -> MyResult<()> {
 
     let config = load_config().expect("was not able to find a config");
 
-    let app = config.for_app(&app_name).expect(&format!("unable to find app {}", app_name));
+    let name = app_name.or(config.default.clone()).expect("need to specific which app to use");
+
+    let app = config.for_app(&name).expect(&format!("unable to find app {}", name));
 
     match app.run(c).await {
         Ok(value) => println!("Success: {}\n", value),
